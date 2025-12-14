@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import multer from "multer";
 import fs from "fs";
-import pdf from "pdf-parse";
+import pdfParse from "pdf-parse";
 import Tesseract from "tesseract.js";
 import OpenAI from "openai";
 
@@ -51,7 +51,7 @@ const mime = req.file.mimetype;
 // PDF
 if (mime === "application/pdf") {
 const dataBuffer = fs.readFileSync(filePath);
-const pdfData = await pdf(dataBuffer);
+const pdfData = await pdfParse(dataBuffer);
 
 if (pdfData.text.trim().length > 50) {
 extractedText = pdfData.text;
