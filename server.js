@@ -5,16 +5,22 @@ import fs from "fs";
 import Tesseract from "tesseract.js";
 import OpenAI from "openai";
 import { createRequire } from "module";
+
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
+
+// ✅ AICI SE DEFINEȘTE app (OBLIGATORIU)
 const app = express();
+
+// ✅ DUPĂ ce app există
 const upload = multer({ dest: "uploads/" });
 
-aapp.use(cors({
+app.use(cors({
 origin: "*",
 methods: ["GET", "POST", "OPTIONS"],
-allowedHeaders: ["Content-Type"],
+allowedHeaders: ["Content-Type"]
 }));
+
 app.options("*", cors());
 app.use(express.json());
 
