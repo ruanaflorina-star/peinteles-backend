@@ -7,68 +7,67 @@ import OpenAI from "openai";
 import { createRequire } from "module";
 
 const require = createRequire(import.meta.url);
-const pdfParse = require("pdf-parse");
+const pdfParse = require("pdf-parse"); // <-- CORECT pt Node 22 + ESModules
 
-// ✅ AICI SE DEFINEȘTE app (OBLIGATORIU)
+/* =======================
+INIT
+======================= */
 const app = express();
-
-// ✅ DUPĂ ce app există
 const upload = multer({ dest: "uploads/" });
 
 app.use(cors({
 origin: "*",
-methods: ["GET", "POST", "OPTIONS"],
+methods: ["GET", "POST"],
 allowedHeaders: ["Content-Type"]
 }));
 
 app.use(express.json());
 
+/* =======================
+OPENAI
+======================= */
 const openai = new OpenAI({
 apiKey: process.env.OPENAI_API_KEY,
 });
 
-/* =========================
+/* =======================
 HEALTH CHECK
-========================= */
+======================= */
 app.get("/", (req, res) => {
-res.json({
-status: "ok",
-message: "Peinteles backend running",
-});
+res.json({ status: "ok", message: "Peinteles backend running" });
 });
 
-/* =========================
-OCR + AI ENDPOINT
-========================= */
+/* =======================
+OCR + AI
+======================= */
 app.post("/api/interpret", upload.single("file"), async (req, res) => {
 try {
 let extractedText = "";
 
-/* ====== TEXT DIRECT ====== */
+/* TEXT DIRECT */
 if (req.body.text && req.body.text.trim() !== "") {
 extractedText = req.body.text;
 }
 
-/* ====== FILE ====== */
+/* FILE */
 if (req.file) {
 const filePath = req.file.path;
 const mime = req.file.mimetype;
 
 // PDF
 if (mime === "application/pdf") {
-const dataBuffer = fs.readFileSync(filePath);
-const pdfData = await pdfParse(dataBuffer);
+const buffer = fs.readFileSync(filePath);
+const pdfData = await pdfParse(buffer);
 
-if (pdfData.text.trim().length > 50) {
+if (pdfData.text && pdfData.text.trim().length > 50) {
 extractedText = pdfData.text;
 } else {
-// OCR PDF scanat
 const ocr = await Tesseract.recognize(filePath, "eng+ron");
 extractedText = ocr.data.text;
 }
 }
 
-// IMAGINE
+// IMAGE
 if (mime.startsWith("image/")) {
 const ocr = await Tesseract.recognize(filePath, "eng+ron");
 extractedText = ocr.data.text;
@@ -77,41 +76,38 @@ extractedText = ocr.data.text;
 fs.unlinkSync(filePath);
 }
 
-if (!extractedText || extractedText.trim().length < 20) {
-return res.status(400).json({
-error: "Nu s-a putut extrage text relevant din document.",
-});
+if (!extractedText || extractedText.trim() === "") {
+return res.status(400).json({ error: "Nu am putut extrage text." });
 }
 
-/* ====== AI ====== */
+/* AI */
 const completion = await openai.chat.completions.create({
 model: "gpt-4o-mini",
 messages: [
 {
 role: "system",
-content:
-"Ești un asistent care explică documente oficiale pe înțelesul tuturor, clar și structurat.",
+content: "Interpretează clar și structurat documentul."
 },
 {
 role: "user",
-content: extractedText,
-},
-],
+content: extractedText
+}
+]
 });
 
 res.json({
-extractedText,
-interpretation: completion.choices[0].message.content,
+interpretation: completion.choices[0].message.content
 });
+
 } catch (err) {
 console.error(err);
-res.status(500).json({
-error: "Eroare server OCR / AI",
-});
+res.status(500).json({ error: "Eroare server OCR / AI" });
 }
 });
 
-/* ========================= */
+/* =======================
+START
+======================= */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
 console.log("Server pornit pe port", PORT);

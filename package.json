@@ -1,22 +1,17 @@
 {
-  "name": "peinteles-backend",
-  "version": "1.0.0",
-  "description": "",
-  "main": "server.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "module",
-  "dependencies": {
-    "cors": "^2.8.5",
-    "dotenv": "^17.2.3",
-    "express": "^5.2.1",
-    "multer": "^2.0.2",
-    "openai": "^6.10.0",
-    "pdf-parse": "^2.4.5",
-    "tesseract.js": "^6.0.1"
-  }
+"name": "peinteles-backend",
+"version": "1.0.0",
+"type": "module",
+"main": "server.js",
+"scripts": {
+"start": "node server.js"
+},
+"dependencies": {
+"cors": "^2.8.5",
+"express": "^4.21.2",
+"multer": "^2.0.2",
+"openai": "^4.10.0",
+"pdf-parse": "^1.1.1",
+"tesseract.js": "^6.0.1"
+}
 }
