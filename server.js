@@ -1,7 +1,13 @@
 import express from "express";
 import cors from "cors";
 
-const app = express();
+const app = express()
+app.get("/", (req, res) => {
+res.json({
+status: "OK",
+message: "Peinteles backend is running 🚀"
+});
+});
 app.use(cors());
 app.use(express.json());
 
