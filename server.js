@@ -2,10 +2,11 @@ import express from "express";
 import cors from "cors";
 import multer from "multer";
 import fs from "fs";
-import pdfParse from "pdf-parse";
 import Tesseract from "tesseract.js";
 import OpenAI from "openai";
-
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+const pdfParse = require("pdf-parse");
 const app = express();
 const upload = multer({ dest: "uploads/" });
 
