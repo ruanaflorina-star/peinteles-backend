@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import multer from "multer";
 import fs from "fs";
+import path from "path";
 import Tesseract from "tesseract.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { createRequire } from "module";
@@ -13,7 +14,46 @@ const pdfParse = require("pdf-parse");
    INIT
 ======================= */
 const app = express();
-const upload = multer({ dest: "uploads/" });
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = "uploads/";
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({ 
+  storage: storage,
+  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB max
+  fileFilter: (req, file, cb) => {
+    // Accept PDFs, images, and text files
+    const allowedMimes = [
+      'application/pdf',
+      'image/jpeg',
+      'image/jpg', 
+      'image/png',
+      'image/gif',
+      'image/webp',
+      'image/bmp',
+      'image/tiff',
+      'text/plain'
+    ];
+    
+    if (allowedMimes.includes(file.mimetype) || file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error(`Tip de fișier neacceptat: ${file.mimetype}`), false);
+    }
+  }
+});
 
 app.use(cors({
   origin: "*",
@@ -123,7 +163,14 @@ REGULI:
 app.get("/", (req, res) => {
   res.json({ 
     status: "ok", 
-    message: "Peinteles backend v2.0 - Claude AI",
+    message: "Peinteles backend v2.1 - Claude AI + OCR",
+    features: [
+      "PDF text extraction",
+      "PDF scanned (OCR)",
+      "Image OCR (JPG, PNG, etc.)",
+      "Claude Vision for images",
+      "Text files"
+    ],
     endpoints: [
       "POST /api/interpret - Analiză document (preview gratuit)",
       "POST /api/interpret-full - Analiză completă (după plată)",
@@ -133,57 +180,127 @@ app.get("/", (req, res) => {
 });
 
 app.get("/health", (req, res) => {
-  res.json({ status: "healthy", version: "2.0" });
+  res.json({ status: "healthy", version: "2.1" });
 });
 
 /* =======================
-   HELPER: Extract text from file
+   HELPER: Extract text from file using multiple methods
 ======================= */
 async function extractTextFromFile(file) {
   const filePath = file.path;
   const mime = file.mimetype;
+  const originalName = file.originalname || "document";
+  
+  console.log(`Processing file: ${originalName} (${mime})`);
+  
   let extractedText = "";
+  let method = "unknown";
 
   try {
-    // PDF
+    // ============ PDF FILES ============
     if (mime === "application/pdf") {
-      const buffer = fs.readFileSync(filePath);
-      const pdfData = await pdfParse(buffer);
-
-      if (pdfData.text && pdfData.text.trim().length > 50) {
-        extractedText = pdfData.text;
-      } else {
-        // PDF scanat - folosim OCR
-        const ocr = await Tesseract.recognize(filePath, "eng+ron");
+      console.log("Attempting PDF text extraction...");
+      
+      try {
+        const buffer = fs.readFileSync(filePath);
+        const pdfData = await pdfParse(buffer);
+        
+        // Check if we got meaningful text
+        const text = pdfData.text ? pdfData.text.trim() : "";
+        
+        if (text.length > 100) {
+          // Good amount of text - it's a text-based PDF
+          extractedText = text;
+          method = "pdf-text";
+          console.log(`PDF text extraction successful: ${text.length} chars`);
+        } else {
+          // Very little or no text - probably scanned, use OCR
+          console.log("PDF appears to be scanned, using OCR...");
+          const ocr = await Tesseract.recognize(filePath, "ron+eng", {
+            logger: m => {
+              if (m.status === 'recognizing text') {
+                console.log(`OCR progress: ${Math.round(m.progress * 100)}%`);
+              }
+            }
+          });
+          extractedText = ocr.data.text;
+          method = "pdf-ocr";
+          console.log(`PDF OCR successful: ${extractedText.length} chars`);
+        }
+      } catch (pdfErr) {
+        console.error("PDF parsing failed, trying OCR:", pdfErr.message);
+        // If PDF parsing fails completely, try OCR
+        const ocr = await Tesseract.recognize(filePath, "ron+eng");
         extractedText = ocr.data.text;
+        method = "pdf-ocr-fallback";
+      }
+    }
+    
+    // ============ IMAGE FILES ============
+    else if (mime.startsWith("image/")) {
+      console.log("Processing image with OCR...");
+      
+      const ocr = await Tesseract.recognize(filePath, "ron+eng", {
+        logger: m => {
+          if (m.status === 'recognizing text') {
+            console.log(`OCR progress: ${Math.round(m.progress * 100)}%`);
+          }
+        }
+      });
+      
+      extractedText = ocr.data.text;
+      method = "image-ocr";
+      console.log(`Image OCR successful: ${extractedText.length} chars`);
+    }
+    
+    // ============ TEXT FILES ============
+    else if (mime === "text/plain") {
+      extractedText = fs.readFileSync(filePath, "utf-8");
+      method = "text-file";
+      console.log(`Text file read: ${extractedText.length} chars`);
+    }
+    
+    // ============ UNKNOWN TYPE ============
+    else {
+      console.log(`Unknown mime type: ${mime}, trying OCR as fallback...`);
+      try {
+        const ocr = await Tesseract.recognize(filePath, "ron+eng");
+        extractedText = ocr.data.text;
+        method = "unknown-ocr";
+      } catch (ocrErr) {
+        console.error("OCR fallback failed:", ocrErr.message);
       }
     }
 
-    // IMAGE
-    if (mime.startsWith("image/")) {
-      const ocr = await Tesseract.recognize(filePath, "eng+ron");
-      extractedText = ocr.data.text;
-    }
-
-    // TEXT
-    if (mime === "text/plain") {
-      extractedText = fs.readFileSync(filePath, "utf-8");
-    }
-
+  } catch (err) {
+    console.error(`Error processing file: ${err.message}`);
+    throw err;
   } finally {
-    // Cleanup
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+    // Cleanup - delete uploaded file
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        console.log("Cleaned up temporary file");
+      }
+    } catch (cleanupErr) {
+      console.error("Cleanup error:", cleanupErr.message);
     }
   }
 
-  return extractedText;
+  console.log(`Extraction complete. Method: ${method}, Length: ${extractedText.length}`);
+  
+  return {
+    text: extractedText.trim(),
+    method: method
+  };
 }
 
 /* =======================
-   HELPER: Call Claude API
+   HELPER: Call Claude API with text
 ======================= */
-async function callClaude(systemPrompt, userMessage, maxTokens = 1024) {
+async function callClaudeWithText(systemPrompt, userMessage, maxTokens = 1024) {
+  console.log("Calling Claude API (text)...");
+  
   const response = await anthropic.messages.create({
     model: "claude-sonnet-4-20250514",
     max_tokens: maxTokens,
@@ -198,43 +315,147 @@ async function callClaude(systemPrompt, userMessage, maxTokens = 1024) {
 }
 
 /* =======================
+   HELPER: Call Claude API with image (Vision)
+======================= */
+async function callClaudeWithImage(systemPrompt, imageBase64, mimeType, userMessage, maxTokens = 1024) {
+  console.log("Calling Claude API (vision)...");
+  
+  const response = await anthropic.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: maxTokens,
+    system: systemPrompt,
+    messages: [
+      { 
+        role: "user", 
+        content: [
+          {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: mimeType,
+              data: imageBase64
+            }
+          },
+          {
+            type: "text",
+            text: userMessage
+          }
+        ]
+      }
+    ]
+  });
+
+  const textContent = response.content.find(c => c.type === "text");
+  return textContent ? textContent.text : "Nu am putut genera un răspuns.";
+}
+
+/* =======================
    POST /api/interpret
    Analiză PREVIEW (gratuit)
 ======================= */
 app.post("/api/interpret", upload.single("file"), async (req, res) => {
+  console.log("\n=== NEW REQUEST: /api/interpret ===");
+  
   try {
     let extractedText = "";
+    let extractionMethod = "direct-text";
+    let useVision = false;
+    let imageBase64 = null;
+    let imageMimeType = null;
 
-    // Text direct din body
-    if (req.body.text && req.body.text.trim() !== "") {
-      extractedText = req.body.text;
+    // Check for direct text input
+    if (req.body.text && req.body.text.trim() !== "" && !req.body.text.startsWith("[")) {
+      extractedText = req.body.text.trim();
+      console.log(`Received direct text: ${extractedText.length} chars`);
     }
 
-    // File upload
+    // Check for file upload
     if (req.file) {
-      extractedText = await extractTextFromFile(req.file);
+      console.log(`Received file: ${req.file.originalname} (${req.file.mimetype}, ${req.file.size} bytes)`);
+      
+      const mime = req.file.mimetype;
+      
+      // For images, we have two options:
+      // 1. Use OCR (Tesseract) - works offline but less accurate
+      // 2. Use Claude Vision - more accurate but costs more
+      // We'll try OCR first, and if result is poor, use Vision
+      
+      if (mime.startsWith("image/")) {
+        // Read image for potential Vision use
+        const imageBuffer = fs.readFileSync(req.file.path);
+        imageBase64 = imageBuffer.toString('base64');
+        imageMimeType = mime;
+        
+        // Try OCR first
+        const result = await extractTextFromFile(req.file);
+        extractedText = result.text;
+        extractionMethod = result.method;
+        
+        // If OCR result is poor (too short or mostly garbage), use Vision
+        if (extractedText.length < 50 || extractedText.split(/\s+/).length < 10) {
+          console.log("OCR result poor, will use Claude Vision instead");
+          useVision = true;
+          extractedText = ""; // Will use Vision
+        }
+      } else {
+        // For PDFs and text files, use regular extraction
+        const result = await extractTextFromFile(req.file);
+        extractedText = result.text;
+        extractionMethod = result.method;
+      }
     }
 
-    if (!extractedText || extractedText.trim() === "") {
-      return res.status(400).json({ error: "Nu am putut extrage text din document." });
+    // Validate we have something to analyze
+    if (!extractedText && !useVision) {
+      return res.status(400).json({ 
+        error: "Nu am putut extrage text din document. Încearcă să faci o poză mai clară sau să copiezi textul manual." 
+      });
     }
 
-    // Trimite la Claude pentru PREVIEW
-    const interpretation = await callClaude(
-      SYSTEM_PROMPT_PREVIEW,
-      `Analizează acest document oficial și oferă un preview scurt:\n\n${extractedText}`,
-      500 // max tokens pentru preview
-    );
+    console.log(`Extraction method: ${extractionMethod}, Text length: ${extractedText.length}, Use Vision: ${useVision}`);
+
+    // Call Claude for analysis
+    let interpretation;
+    
+    if (useVision && imageBase64) {
+      // Use Claude Vision for image analysis
+      interpretation = await callClaudeWithImage(
+        SYSTEM_PROMPT_PREVIEW,
+        imageBase64,
+        imageMimeType,
+        "Analizează această imagine a unui document oficial românesc și oferă un preview scurt conform instrucțiunilor.",
+        600
+      );
+    } else {
+      // Use regular text analysis
+      interpretation = await callClaudeWithText(
+        SYSTEM_PROMPT_PREVIEW,
+        `Analizează acest document oficial și oferă un preview scurt:\n\n${extractedText}`,
+        600
+      );
+    }
+
+    console.log("Analysis complete, sending response");
 
     res.json({
       interpretation: interpretation,
       type: "preview",
+      extractionMethod: extractionMethod,
+      textLength: extractedText.length,
       message: "Aceasta este o previzualizare. Pentru analiza completă, efectuează plata."
     });
 
   } catch (err) {
     console.error("Error in /api/interpret:", err);
-    res.status(500).json({ error: "Eroare la procesarea documentului. Încearcă din nou." });
+    
+    // Handle specific errors
+    if (err.message?.includes("Tip de fișier neacceptat")) {
+      return res.status(400).json({ error: err.message });
+    }
+    
+    res.status(500).json({ 
+      error: "Eroare la procesarea documentului. Te rog încearcă din nou sau copiază textul manual." 
+    });
   }
 });
 
@@ -243,35 +464,71 @@ app.post("/api/interpret", upload.single("file"), async (req, res) => {
    Analiză COMPLETĂ (după plată)
 ======================= */
 app.post("/api/interpret-full", upload.single("file"), async (req, res) => {
+  console.log("\n=== NEW REQUEST: /api/interpret-full ===");
+  
   try {
-    // TODO: Verifică aici dacă utilizatorul a plătit
+    // TODO: Verifică plata aici
     // const paymentVerified = await verifyPayment(req.body.paymentId);
     // if (!paymentVerified) {
     //   return res.status(402).json({ error: "Plata nu a fost verificată." });
     // }
 
     let extractedText = "";
+    let useVision = false;
+    let imageBase64 = null;
+    let imageMimeType = null;
 
-    // Text direct din body
-    if (req.body.text && req.body.text.trim() !== "") {
-      extractedText = req.body.text;
+    // Check for direct text input
+    if (req.body.text && req.body.text.trim() !== "" && !req.body.text.startsWith("[")) {
+      extractedText = req.body.text.trim();
     }
 
-    // File upload
+    // Check for file upload
     if (req.file) {
-      extractedText = await extractTextFromFile(req.file);
+      const mime = req.file.mimetype;
+      
+      if (mime.startsWith("image/")) {
+        const imageBuffer = fs.readFileSync(req.file.path);
+        imageBase64 = imageBuffer.toString('base64');
+        imageMimeType = mime;
+        
+        const result = await extractTextFromFile(req.file);
+        extractedText = result.text;
+        
+        if (extractedText.length < 50) {
+          useVision = true;
+          extractedText = "";
+        }
+      } else {
+        const result = await extractTextFromFile(req.file);
+        extractedText = result.text;
+      }
     }
 
-    if (!extractedText || extractedText.trim() === "") {
-      return res.status(400).json({ error: "Nu am putut extrage text din document." });
+    if (!extractedText && !useVision) {
+      return res.status(400).json({ 
+        error: "Nu am putut extrage text din document." 
+      });
     }
 
-    // Trimite la Claude pentru RĂSPUNS COMPLET
-    const interpretation = await callClaude(
-      SYSTEM_PROMPT_FULL,
-      `Analizează complet acest document oficial și explică tot ce trebuie să știe utilizatorul:\n\n${extractedText}`,
-      4096 // max tokens pentru răspuns complet
-    );
+    // Call Claude for full analysis
+    let interpretation;
+    
+    if (useVision && imageBase64) {
+      interpretation = await callClaudeWithImage(
+        SYSTEM_PROMPT_FULL,
+        imageBase64,
+        imageMimeType,
+        "Analizează complet această imagine a unui document oficial românesc și explică tot ce trebuie să știe utilizatorul.",
+        4096
+      );
+    } else {
+      interpretation = await callClaudeWithText(
+        SYSTEM_PROMPT_FULL,
+        `Analizează complet acest document oficial și explică tot ce trebuie să știe utilizatorul:\n\n${extractedText}`,
+        4096
+      );
+    }
 
     res.json({
       interpretation: interpretation,
@@ -281,7 +538,9 @@ app.post("/api/interpret-full", upload.single("file"), async (req, res) => {
 
   } catch (err) {
     console.error("Error in /api/interpret-full:", err);
-    res.status(500).json({ error: "Eroare la procesarea documentului. Încearcă din nou." });
+    res.status(500).json({ 
+      error: "Eroare la procesarea documentului. Încearcă din nou." 
+    });
   }
 });
 
@@ -290,6 +549,8 @@ app.post("/api/interpret-full", upload.single("file"), async (req, res) => {
    Chat conversațional (după plată)
 ======================= */
 app.post("/api/claude", async (req, res) => {
+  console.log("\n=== NEW REQUEST: /api/claude ===");
+  
   try {
     const { messages, system, image, documentContext } = req.body;
 
@@ -297,13 +558,13 @@ app.post("/api/claude", async (req, res) => {
       return res.status(400).json({ error: "Mesajele sunt obligatorii." });
     }
 
-    // Construiește mesajele pentru API
+    // Build messages for API
     const formattedMessages = [];
 
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i];
       
-      // Verifică dacă ultimul mesaj user are imagine atașată
+      // Check if last user message has image
       const isLastUserMessage = msg.role === "user" && i === messages.length - 1 && image && image.base64;
 
       if (isLastUserMessage) {
@@ -332,15 +593,14 @@ app.post("/api/claude", async (req, res) => {
       }
     }
 
-    // Construiește system prompt
+    // Build system prompt
     let finalSystemPrompt = system || SYSTEM_PROMPT_CHAT;
     
-    // Dacă avem context de document, adaugă-l
     if (documentContext) {
       finalSystemPrompt += `\n\nCONTEXT DOCUMENT ANALIZAT:\n${documentContext}`;
     }
 
-    // Apel Claude
+    // Call Claude
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
       max_tokens: 2048,
@@ -371,59 +631,19 @@ app.post("/api/claude", async (req, res) => {
 });
 
 /* =======================
-   POST /api/analyze-image
-   Analiză imagine cu Claude Vision
+   Error Handling Middleware
 ======================= */
-app.post("/api/analyze-image", async (req, res) => {
-  try {
-    const { image, type } = req.body; // type: "preview" sau "full"
-
-    if (!image || !image.base64) {
-      return res.status(400).json({ error: "Imaginea este obligatorie." });
+app.use((err, req, res, next) => {
+  console.error("Unhandled error:", err);
+  
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ error: "Fișierul este prea mare. Maxim 20MB." });
     }
-
-    const systemPrompt = type === "full" ? SYSTEM_PROMPT_FULL : SYSTEM_PROMPT_PREVIEW;
-    const userPrompt = type === "full" 
-      ? "Analizează complet acest document oficial din imagine și explică tot ce trebuie să știe utilizatorul."
-      : "Analizează această imagine a unui document oficial și oferă un preview scurt.";
-
-    const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: type === "full" ? 4096 : 500,
-      system: systemPrompt,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: image.mimeType || "image/jpeg",
-                data: image.base64
-              }
-            },
-            {
-              type: "text",
-              text: userPrompt
-            }
-          ]
-        }
-      ]
-    });
-
-    const textContent = response.content.find(c => c.type === "text");
-    const interpretation = textContent ? textContent.text : "Nu am putut analiza imaginea.";
-
-    res.json({
-      interpretation: interpretation,
-      type: type || "preview"
-    });
-
-  } catch (err) {
-    console.error("Error in /api/analyze-image:", err);
-    res.status(500).json({ error: "Eroare la analiza imaginii." });
+    return res.status(400).json({ error: `Eroare upload: ${err.message}` });
   }
+  
+  res.status(500).json({ error: "Eroare internă de server." });
 });
 
 /* =======================
@@ -438,7 +658,8 @@ app.use((req, res) => {
 ======================= */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Peinteles Backend v2.0 running on port ${PORT}`);
-  console.log(`📋 Using Claude AI (Anthropic)`);
+  console.log(`🚀 Peinteles Backend v2.1 running on port ${PORT}`);
+  console.log(`📋 Using Claude AI (Anthropic) + Tesseract OCR`);
+  console.log(`📄 Supported: PDF, JPG, PNG, GIF, WEBP, BMP, TIFF, TXT`);
   console.log(`💰 Freemium model: preview + full analysis`);
 });
