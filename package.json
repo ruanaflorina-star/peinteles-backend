@@ -1,17 +1,31 @@
 {
-"name": "peinteles-backend",
-"version": "1.0.0",
-"type": "module",
-"main": "server.js",
-"scripts": {
-"start": "node server.js"
-},
-"dependencies": {
-"cors": "^2.8.5",
-"express": "^4.21.2",
-"multer": "^2.0.2",
-"openai": "^4.10.0",
-"pdf-parse": "^1.1.1",
-"tesseract.js": "^6.0.1"
-}
+  "name": "peinteles-backend",
+  "version": "2.0.0",
+  "description": "Backend pentru PeÎnțeles - Analiza documentelor oficiale cu Claude AI",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "multer": "^1.4.5-lts.1",
+    "pdf-parse": "^1.1.1",
+    "tesseract.js": "^5.1.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "claude",
+    "anthropic",
+    "document-analysis",
+    "romania",
+    "peinteles"
+  ],
+  "author": "PeÎnțeles",
+  "license": "MIT"
 }
