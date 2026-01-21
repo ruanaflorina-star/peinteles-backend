@@ -224,25 +224,17 @@ async function extractTextFromFile(file) {
           method = "pdf-text";
           console.log(`PDF text extraction successful: ${text.length} chars`);
         } else {
-          // Very little or no text - probably scanned, use OCR
-          console.log("PDF appears to be scanned, using OCR...");
-          const ocr = await Tesseract.recognize(filePath, "ron+eng", {
-            logger: m => {
-              if (m.status === 'recognizing text') {
-                console.log(`OCR progress: ${Math.round(m.progress * 100)}%`);
-              }
-            }
-          });
-          extractedText = ocr.data.text;
-          method = "pdf-ocr";
-          console.log(`PDF OCR successful: ${extractedText.length} chars`);
+          // Very little or no text - probably scanned
+          // Return empty text and flag for Vision processing
+          console.log("PDF appears to be scanned, will use Claude Vision...");
+          extractedText = "";
+          method = "pdf-scanned-vision";
         }
       } catch (pdfErr) {
-        console.error("PDF parsing failed, trying OCR:", pdfErr.message);
-        // If PDF parsing fails completely, try OCR
-        const ocr = await Tesseract.recognize(filePath, "ron+eng");
-        extractedText = ocr.data.text;
-        method = "pdf-ocr-fallback";
+        console.error("PDF parsing failed:", pdfErr.message);
+        // If PDF parsing fails, flag for Vision
+        extractedText = "";
+        method = "pdf-error-vision";
       }
     }
     
@@ -360,6 +352,41 @@ async function callClaudeWithImage(systemPrompt, imageBase64, mimeType, userMess
 }
 
 /* =======================
+   HELPER: Call Claude API with PDF document
+======================= */
+async function callClaudeWithPDF(systemPrompt, pdfBase64, userMessage, maxTokens = 1024) {
+  console.log("Calling Claude API (PDF document)...");
+  
+  const response = await anthropic.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: maxTokens,
+    system: systemPrompt,
+    messages: [
+      { 
+        role: "user", 
+        content: [
+          {
+            type: "document",
+            source: {
+              type: "base64",
+              media_type: "application/pdf",
+              data: pdfBase64
+            }
+          },
+          {
+            type: "text",
+            text: userMessage
+          }
+        ]
+      }
+    ]
+  });
+
+  const textContent = response.content.find(c => c.type === "text");
+  return textContent ? textContent.text : "Nu am putut genera un răspuns.";
+}
+
+/* =======================
    POST /api/interpret
    Analiză PREVIEW (gratuit)
 ======================= */
@@ -372,6 +399,7 @@ app.post("/api/interpret", upload.single("file"), async (req, res) => {
     let useVision = false;
     let imageBase64 = null;
     let imageMimeType = null;
+    let pdfBase64 = null;
 
     // Check for direct text input
     if (req.body.text && req.body.text.trim() !== "" && !req.body.text.startsWith("[")) {
@@ -407,8 +435,22 @@ app.post("/api/interpret", upload.single("file"), async (req, res) => {
           useVision = true;
           extractedText = ""; // Will use Vision
         }
+      } else if (mime === "application/pdf") {
+        // For PDFs, try text extraction first
+        const result = await extractTextFromFile(req.file);
+        extractedText = result.text;
+        extractionMethod = result.method;
+        
+        // If PDF is scanned (no text extracted), use Claude Vision with PDF
+        if (extractionMethod.includes("vision") || extractedText.length < 50) {
+          console.log("PDF is scanned, will use Claude Vision");
+          const pdfBuffer = fs.readFileSync(req.file.path);
+          pdfBase64 = pdfBuffer.toString('base64');
+          useVision = true;
+          extractedText = "";
+        }
       } else {
-        // For PDFs and text files, use regular extraction
+        // For text files, use regular extraction
         const result = await extractTextFromFile(req.file);
         extractedText = result.text;
         extractionMethod = result.method;
@@ -427,7 +469,16 @@ app.post("/api/interpret", upload.single("file"), async (req, res) => {
     // Call Claude for analysis
     let interpretation;
     
-    if (useVision && imageBase64) {
+    if (useVision && pdfBase64) {
+      // Use Claude Vision for scanned PDF
+      console.log("Using Claude Vision for scanned PDF...");
+      interpretation = await callClaudeWithPDF(
+        SYSTEM_PROMPT_PREVIEW,
+        pdfBase64,
+        "Analizează acest document PDF oficial românesc și oferă un preview scurt conform instrucțiunilor.",
+        600
+      );
+    } else if (useVision && imageBase64) {
       // Use Claude Vision for image analysis
       interpretation = await callClaudeWithImage(
         SYSTEM_PROMPT_PREVIEW,
@@ -487,6 +538,7 @@ app.post("/api/interpret-full", upload.single("file"), async (req, res) => {
     let useVision = false;
     let imageBase64 = null;
     let imageMimeType = null;
+    let pdfBase64 = null;
 
     // Check for direct text input
     if (req.body.text && req.body.text.trim() !== "" && !req.body.text.startsWith("[")) {
@@ -509,6 +561,19 @@ app.post("/api/interpret-full", upload.single("file"), async (req, res) => {
           useVision = true;
           extractedText = "";
         }
+      } else if (mime === "application/pdf") {
+        // For PDFs, try text extraction first
+        const result = await extractTextFromFile(req.file);
+        extractedText = result.text;
+        
+        // If PDF is scanned (no text extracted), use Claude Vision with PDF
+        if (result.method.includes("vision") || extractedText.length < 50) {
+          console.log("PDF is scanned, will use Claude Vision for full analysis");
+          const pdfBuffer = fs.readFileSync(req.file.path);
+          pdfBase64 = pdfBuffer.toString('base64');
+          useVision = true;
+          extractedText = "";
+        }
       } else {
         const result = await extractTextFromFile(req.file);
         extractedText = result.text;
@@ -524,7 +589,16 @@ app.post("/api/interpret-full", upload.single("file"), async (req, res) => {
     // Call Claude for full analysis
     let interpretation;
     
-    if (useVision && imageBase64) {
+    if (useVision && pdfBase64) {
+      // Use Claude Vision for scanned PDF
+      console.log("Using Claude Vision for scanned PDF (full analysis)...");
+      interpretation = await callClaudeWithPDF(
+        SYSTEM_PROMPT_FULL,
+        pdfBase64,
+        "Analizează complet acest document PDF oficial românesc și explică tot ce trebuie să știe utilizatorul.",
+        4096
+      );
+    } else if (useVision && imageBase64) {
       interpretation = await callClaudeWithImage(
         SYSTEM_PROMPT_FULL,
         imageBase64,
