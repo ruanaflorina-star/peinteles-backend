@@ -436,6 +436,10 @@ app.post("/api/interpret", upload.single("file"), async (req, res) => {
           extractedText = ""; // Will use Vision
         }
       } else if (mime === "application/pdf") {
+        // Read PDF first (before extraction might delete it)
+        const pdfBuffer = fs.readFileSync(req.file.path);
+        pdfBase64 = pdfBuffer.toString('base64');
+        
         // For PDFs, try text extraction first
         const result = await extractTextFromFile(req.file);
         extractedText = result.text;
@@ -444,8 +448,6 @@ app.post("/api/interpret", upload.single("file"), async (req, res) => {
         // If PDF is scanned (no text extracted), use Claude Vision with PDF
         if (extractionMethod.includes("vision") || extractedText.length < 50) {
           console.log("PDF is scanned, will use Claude Vision");
-          const pdfBuffer = fs.readFileSync(req.file.path);
-          pdfBase64 = pdfBuffer.toString('base64');
           useVision = true;
           extractedText = "";
         }
@@ -562,6 +564,10 @@ app.post("/api/interpret-full", upload.single("file"), async (req, res) => {
           extractedText = "";
         }
       } else if (mime === "application/pdf") {
+        // Read PDF first (before extraction might delete it)
+        const pdfBuffer = fs.readFileSync(req.file.path);
+        pdfBase64 = pdfBuffer.toString('base64');
+        
         // For PDFs, try text extraction first
         const result = await extractTextFromFile(req.file);
         extractedText = result.text;
@@ -569,8 +575,6 @@ app.post("/api/interpret-full", upload.single("file"), async (req, res) => {
         // If PDF is scanned (no text extracted), use Claude Vision with PDF
         if (result.method.includes("vision") || extractedText.length < 50) {
           console.log("PDF is scanned, will use Claude Vision for full analysis");
-          const pdfBuffer = fs.readFileSync(req.file.path);
-          pdfBase64 = pdfBuffer.toString('base64');
           useVision = true;
           extractedText = "";
         }
